@@ -7,85 +7,55 @@ uses temporary storage (removed when your experiment ends) that you can use.
 Instructions:
 Click on any node in the topology and choose the `shell` menu item. Your shared NFS directory is mounted at `/nfs` on all nodes."""
 
-# Import the Portal object.
 import geni.portal as portal
-# Import the ProtoGENI library.
 import geni.rspec.pg as pg
-# Import the Emulab specific extensions.
 import geni.rspec.emulab as emulab
+import geni.rspec.igext as igext
 
-# Create a portal context.
 pc = portal.Context()
-
-# Create a Request object to start building the RSpec.
 request = pc.makeRequestRSpec()
 
-# Only Ubuntu images supported.
-imageList = [
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD', 'UBUNTU 24.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD', 'UBUNTU 22.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU18-64-STD', 'UBUNTU 18.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//CENTOS9S-64-STD', 'CENTOS Stream 9'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//FBSD135-64-STD', 'FreeBSD 13.5'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//FBSD142-64-STD', 'FreeBSD 14.2'),
-]
+# nodes
+nfs = request.RawPC('nfs'); nfs.hardware_type = 'm510'; if0 = nfs.addInterface('iface-exp')
+node_1 = request.RawPC('node-1'); node_1.hardware_type = 'm510'; if1 = node_1.addInterface('iface-exp')
+node_2 = request.RawPC('node-2'); node_2.hardware_type = 'm510'; if2 = node_2.addInterface('iface-exp')
 
-# Do not change these unless you change the setup scripts too.
-nfsServerName = "nfs"
-nfsLanName    = "nfsLan"
-nfsDirectory  = "/nfs"
+site_cm = "urn:publicid:IDN+utah.cloudlab.us+authority+cm"
+img = "urn:publicid:IDN+utah.cloudlab.us+image+emulab-ops//UBUNTU22-64-STD"
+for n in (nfs, node_1, node_2):
+    n.component_manager_id = site_cm
+    n.disk_image = img
 
-# Number of NFS clients (there is always a server)
-pc.defineParameter("clientCount", "Number of NFS clients",
-                   portal.ParameterType.INTEGER, 2)
+# LAN for NFS
+lan = pg.LAN('nfs-lan')
+lan.best_effort = True
+lan.vlan_tagging = True
+lan.link_multiplexing = True
 
-pc.defineParameter("dataset", "Your dataset URN",
-                   portal.ParameterType.STRING,
-                   "urn:publicid:IDN+emulab.net:portalprofiles+ltdataset+DemoDataset")
+if0.addAddress(pg.IPv4Address("10.0.0.1", "255.255.255.0"))
+if1.addAddress(pg.IPv4Address("10.0.0.2", "255.255.255.0"))
+if2.addAddress(pg.IPv4Address("10.0.0.3", "255.255.255.0"))
+lan.addInterface(if0); lan.addInterface(if1); lan.addInterface(if2)
+request.addResource(lan)
 
-pc.defineParameter("osImage", "Select OS image",
-                   portal.ParameterType.IMAGE,
-                   imageList[1], imageList)
+# dataset on server only, mounted at /nfs
+URN = "urn:publicid:IDN+utah.cloudlab.us:rdmaanns-pg0+ltdataset+ANN_dataset"
+MP  = "/nfs"
 
-# Always need this when using parameters
-params = pc.bindParameters()
+rbs = request.RemoteBlockstore("dsnode", MP)
+rbs.dataset = URN
 
-# The NFS network. All these options are required.
-nfsLan = request.LAN(nfsLanName)
-nfsLan.best_effort       = True
-nfsLan.vlan_tagging      = True
-nfsLan.link_multiplexing = True
+ds_if = nfs.addInterface("iface-ds")
+ds_link = request.Link("dslink")
+ds_link.addInterface(ds_if)
+ds_link.addInterface(rbs.interface)
+ds_link.best_effort = True
+ds_link.vlan_tagging = True
+ds_link.link_multiplexing = True
 
-# The NFS server.
-nfsServer = request.RawPC(nfsServerName)
-nfsServer.disk_image = params.osImage
-# Attach server to lan.
-nfsLan.addInterface(nfsServer.addInterface())
-# Initialization script for the server
-nfsServer.addService(pg.Execute(shell="sh", command="sudo /bin/bash /local/repository/nfs-server.sh"))
+# run official init scripts
+nfs.addService(pg.Execute(shell="sh", command="sudo /bin/bash /local/repository/nfs-server.sh"))
+for n in (node_1, node_2):
+    n.addService(pg.Execute(shell="sh", command="sudo /bin/bash /local/repository/nfs-client.sh"))
 
-# Special node that represents the ISCSI device where the dataset resides
-dsnode = request.RemoteBlockstore("dsnode", nfsDirectory)
-dsnode.dataset = params.dataset
-
-# Link between the nfsServer and the ISCSI device that holds the dataset
-dslink = request.Link("dslink")
-dslink.addInterface(dsnode.interface)
-dslink.addInterface(nfsServer.addInterface())
-# Special attributes for this link that we must use.
-dslink.best_effort = True
-dslink.vlan_tagging = True
-dslink.link_multiplexing = True
-
-# The NFS clients, also attached to the NFS lan.
-for i in range(1, params.clientCount+1):
-    node = request.RawPC("node%d" % i)
-    node.disk_image = params.osImage
-    nfsLan.addInterface(node.addInterface())
-    # Initialization script for the clients
-    node.addService(pg.Execute(shell="sh", command="sudo /bin/bash /local/repository/nfs-client.sh"))
-    pass
-
-# Print the RSpec to the enclosing page.
 pc.printRequestRSpec(request)
