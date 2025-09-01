@@ -27,7 +27,7 @@ for n in (nfs, node_1, node_2):
     n.disk_image = img
 
 # LAN for NFS
-lan = pg.LAN('nfs-lan')
+lan = pg.LAN('nfsLan')
 lan.best_effort = True
 lan.vlan_tagging = True
 lan.link_multiplexing = True
